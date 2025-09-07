@@ -1,84 +1,81 @@
-import discord
+import os
 import json
-import asyncio
+import discord
+from discord.ext import commands, tasks
 
-# ---------- CONFIG ----------
-TOKEN = "YOUR_DISCORD_BOT_TOKEN"
-GUILD_ID = 154070238806147072  # replace with your server ID
-CHANNEL_ID = 1133590077394649138  # replace with your target channel ID
-CHECK_INTERVAL = 300  # 5 minutes
+TOKEN = os.environ.get('TOKEN')
+if not TOKEN:
+    raise ValueError("Discord bot token not set in environment variables!")
+
+CHANNEL_ID = YOUR_CHANNEL_ID  # replace with your Discord channel ID
 
 intents = discord.Intents.default()
 intents.messages = True
-intents.guilds = True
-bot = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ---------- LOAD PLAYERS ----------
-with open("tracked_players.json") as f:
-    tracked_players = json.load(f)["players"]
+# JSON files
+PLAYERS_FILE = 'tracked_players.json'
+LEVELS_FILE = 'tracked_levels.json'
 
-# ---------- TRACK LEVELS ----------
-# Replace this with your method to get player skills
-def get_player_levels(player):
-    """
-    Returns a dict of {skill_name: level}
-    For example: {"Attack": 75, "Divination": 85}
-    """
-    # Your actual API or scraping code goes here
-    return {}
+# Load tracked players
+if os.path.exists(PLAYERS_FILE):
+    with open(PLAYERS_FILE, 'r') as f:
+        tracked_players = json.load(f)
+else:
+    tracked_players = []
+    with open(PLAYERS_FILE, 'w') as f:
+        json.dump(tracked_players, f)
 
-# Memory store for old levels
-player_old_levels = {player: get_player_levels(player) for player in tracked_players}
+# Load previous levels
+if os.path.exists(LEVELS_FILE):
+    with open(LEVELS_FILE, 'r') as f:
+        previous_levels = json.load(f)
+else:
+    previous_levels = {}
 
-# Batch storage for pending level-ups
-pending_level_ups = {}
+def save_levels():
+    with open(LEVELS_FILE, 'w') as f:
+        json.dump(previous_levels, f, indent=4)
 
-# ---------- LEVEL-UP DETECTION ----------
-def record_level_ups(player, old_levels, new_levels):
-    """
-    Compares old and new levels, records only real level-ups
-    """
-    for skill, new_lvl in new_levels.items():
-        old_lvl = old_levels.get(skill, 0)
-        if new_lvl > old_lvl:
-            # Optional: skip fake events here
-            if player not in pending_level_ups:
-                pending_level_ups[player] = {}
-            pending_level_ups[player][skill] = new_lvl
+# Replace this with your actual level-fetching logic
+def get_current_levels():
+    return {
+        "GIM Mythy": {"Divination": 85, "Constitution": 85},
+        "GIMSeedSpoon": {"Divination": 60}
+    }
 
-# ---------- POSTING LOOP ----------
-async def post_pending_level_ups(channel):
-    while True:
-        if pending_level_ups:
-            msg = "**Level-ups in the last 5 minutes:**\n"
-            for player, skills in pending_level_ups.items():
-                skill_str = ", ".join(f"{skill} {lvl}" for skill, lvl in skills.items())
-                msg += f"- {player}: {skill_str}\n"
-            
-            await channel.send(msg)
-            pending_level_ups.clear()  # reset after posting
-
-        await asyncio.sleep(CHECK_INTERVAL)
-
-# ---------- CHECK LOOP ----------
-async def check_players_loop(channel):
-    while True:
-        for player in tracked_players:
-            new_levels = get_player_levels(player)
-            old_levels = player_old_levels[player]
-            record_level_ups(player, old_levels, new_levels)
-            player_old_levels[player] = new_levels
-        await asyncio.sleep(CHECK_INTERVAL)
-
-# ---------- BOT EVENTS ----------
 @bot.event
 async def on_ready():
-    print(f"{bot.user} logged in")
-    channel = bot.get_channel(CHANNEL_ID)
-    bot.loop.create_task(post_pending_level_ups(channel))
-    bot.loop.create_task(check_players_loop(channel))
+    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
+    update_loop.start()
 
-# ---------- START BOT ----------
+@tasks.loop(minutes=20)
+async def update_loop():
+    channel = bot.get_channel(CHANNEL_ID)
+    current_levels = get_current_levels()
+    messages = []
+
+    for player in tracked_players:
+        skills = current_levels.get(player, {})
+        leveled_up_skills = {}
+
+        if player not in previous_levels:
+            previous_levels[player] = {}
+
+        for skill, level in skills.items():
+            last_level = previous_levels[player].get(skill, 0)
+            if level > last_level:
+                leveled_up_skills[skill] = level
+                previous_levels[player][skill] = level
+
+        if leveled_up_skills:
+            skill_updates = ', '.join(f"{skill} to {lvl}" for skill, lvl in leveled_up_skills.items())
+            messages.append(f"{player} has leveled up {skill_updates}!")
+
+    if messages:
+        await channel.send("\n".join(messages))
+        save_levels()
+
 bot.run(TOKEN)
 
 
