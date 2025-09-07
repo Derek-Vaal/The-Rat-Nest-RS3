@@ -1,103 +1,116 @@
-import discord
-from discord.ext import tasks
-import aiohttp
-import asyncio
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+import aiohttp
+import discord
+from discord.ext import tasks
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s')
+# === Logging ===
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)-8s] %(message)s')
 
-# Discord intents
+# === Load environment variables ===
+TOKEN = os.getenv("DISCORD_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", 0))
+
+# === Load tracked players ===
+TRACKED_PLAYERS_FILE = "tracked_players.json"
+if os.path.exists(TRACKED_PLAYERS_FILE):
+    with open(TRACKED_PLAYERS_FILE, "r") as f:
+        tracked_data = json.load(f)
+        TRACKED_PLAYERS = tracked_data.get("players", [])
+else:
+    TRACKED_PLAYERS = []
+    logging.warning("⚠️ No tracked_players.json found, starting with empty list")
+
+# === Database of seen events (avoid duplicates) ===
+DB_FILE = "db.json"
+if os.path.exists(DB_FILE):
+    with open(DB_FILE, "r") as f:
+        db = json.load(f)
+else:
+    db = {"seen_events": {}}
+
+def save_db():
+    with open(DB_FILE, "w") as f:
+        json.dump(db, f, indent=4)
+
+# === Discord client ===
 intents = discord.Intents.default()
-intents.message_content = True
 client = discord.Client(intents=intents)
 
-# Load settings
-TOKEN = os.getenv("DISCORD_TOKEN")
-INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))  # default = 300s
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+# === Helper functions ===
+async def fetch_runemetrics(rsn):
+    url = f"https://apps.runescape.com/runemetrics/profile/profile?user={rsn}&activities=20"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            else:
+                logging.warning(f"RuneMetrics API returned {resp.status} for {rsn}")
+                return None
 
-# Load tracked players
-with open("tracked_players.json", "r") as f:
-    tracked_data = json.load(f)
-    TRACKED_PLAYERS = tracked_data.get("players", [])
+def format_level_message(player, skill, level):
+    return f"🧱 {player} just reached level {level} in {skill}!"
 
-# Skill emojis
-SKILL_EMOJIS = {
-    "Attack": "⚔️",
-    "Strength": "💪",
-    "Defence": "🛡️",
-    "Ranged": "🏹",
-    "Prayer": "🙏",
-    "Magic": "✨",
-    "Runecrafting": "🌀",
-    "Construction": "🧱",
-    "Dungeoneering": "🗝️",
-    "Slayer": "🕷️",
-    "Farming": "🌱",
-    "Herblore": "🧪",
-    "Mining": "⛏️",
-    "Smithing": "⚒️",
-    "Fishing": "🎣",
-    "Cooking": "🍳",
-    "Firemaking": "🔥",
-    "Woodcutting": "🪓",
-    "Agility": "🤸",
-    "Thieving": "🕶️",
-    "Fletching": "🏹",
-    "Crafting": "🎨",
-    "Hunter": "🐾",
-    "Summoning": "🔮",
-    "Divination": "🔷",
-    "Invention": "💡",
-    "Archaeology": "🏺"
-}
+def format_drop_message(player, item, quantity):
+    return f"💎 {player} just received a rare drop: {quantity} x {item}!"
 
-# In-memory db
-db = {"seen_events": {}}
-
-def format_level_message(rsn, skill, level):
-    emoji = SKILL_EMOJIS.get(skill, "🎉")
-    return f"{emoji} **{rsn}** just reached level {level} in **{skill}**!"
-
-def format_drop_message(rsn, item, quantity):
-    return f"💎 **{rsn}** just received a rare drop: {quantity} x **{item}**!"
-
-@tasks.loop(seconds=INTERVAL)
+# === Main update check ===
+@tasks.loop(seconds=60)
 async def check_updates():
     await client.wait_until_ready()
     logging.info("Running update check...")
 
     for player in TRACKED_PLAYERS:
         logging.info(f"Checking RuneMetrics for {player}...")
+        data = await fetch_runemetrics(player)
 
-        # TODO: Replace with actual RuneMetrics API call
-        # For now we just use a dummy event to test posting
-        sample_events = [
-            {"rsn": player, "type": "levelup", "skill": "Construction", "level": 85},
-            {"rsn": player, "type": "drop", "item": "Armadyl Godsword", "quantity": 1}
-        ]
+        if not data or "activities" not in data:
+            logging.warning(f"No activity data for {player}")
+            continue
 
-        for event in sample_events:
-            rsn = event["rsn"]
-            if rsn not in db["seen_events"]:
-                db["seen_events"][rsn] = []
+        for activity in data["activities"]:
+            text = activity.get("text", "")
+            date = activity.get("date", "")
 
-            unique_id = str(event)
-            if unique_id not in db["seen_events"][rsn]:
-                db["seen_events"][rsn].append(unique_id)
+            if not text or not date:
+                continue
 
-                if event["type"] == "levelup":
-                    message = format_level_message(rsn, event["skill"], event["level"])
-                elif event["type"] == "drop":
-                    message = format_drop_message(rsn, event["item"], event["quantity"])
+            # Unique event key
+            unique_id = f"{player}-{date}-{text}"
+
+            if player not in db["seen_events"]:
+                db["seen_events"][player] = []
+
+            if unique_id not in db["seen_events"][player]:
+                db["seen_events"][player].append(unique_id)
+
+                # Level-up
+                if "level" in text and "in" in text:
+                    try:
+                        parts = text.split(" ")
+                        level = parts[5]
+                        skill = parts[-1]
+                        message = format_level_message(player, skill, level)
+                    except Exception as e:
+                        logging.error(f"Failed to parse level-up message: {text} ({e})")
+                        continue
+
+                # Rare drop
+                elif "rare drop" in text.lower():
+                    try:
+                        drop_text = text.split("rare drop: ")[-1]
+                        quantity, item = drop_text.split(" x ")
+                        message = format_drop_message(player, item, quantity)
+                    except Exception as e:
+                        logging.error(f"Failed to parse drop message: {text} ({e})")
+                        continue
+
                 else:
                     continue
 
                 logging.info(f"Sending message: {message}")
+                save_db()
 
                 if CHANNEL_ID != 0:
                     channel = client.get_channel(CHANNEL_ID)
@@ -106,15 +119,18 @@ async def check_updates():
                     else:
                         logging.warning(f"Channel ID {CHANNEL_ID} not found!")
 
+# === Bot events ===
 @client.event
 async def on_ready():
     logging.info(f"✅ Logged in as {client.user}")
     check_updates.start()
 
-if TOKEN:
-    client.run(TOKEN)
+# === Run bot ===
+if not TOKEN:
+    logging.error("❌ Discord token not set. Make sure DISCORD_TOKEN is in environment variables.")
 else:
-    logging.error("❌ DISCORD_TOKEN not set in environment variables!")
+    client.run(TOKEN)
+
 
 
 
