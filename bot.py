@@ -7,7 +7,7 @@ TOKEN = os.environ.get('TOKEN')
 if not TOKEN:
     raise ValueError("Discord bot token not set in environment variables!")
 
-CHANNEL_ID = YOUR_CHANNEL_ID  # replace with your Discord channel ID
+CHANNEL_ID = 1133590077394649138  # replace with your Discord channel ID
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -77,5 +77,6 @@ async def update_loop():
         save_levels()
 
 bot.run(TOKEN)
+
 
 
