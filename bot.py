@@ -30,7 +30,7 @@ if not TOKEN or len(TOKEN) < 50:
 CHECK_INTERVAL = 20 * 60  # 20 minutes
 # Map event types to Discord channels (adjust as needed)
 EVENT_CHANNELS = {
-    "general": 123456789012345678,  # Replace with your channel ID
+    "general": 1133590077394649138,  # Replace with your channel ID
 }
 
 # ----------------------
@@ -96,6 +96,7 @@ except discord.errors.LoginFailure:
         "Failed to login: DISCORD_TOKEN is invalid. "
         "Double-check the token in Railway settings."
     )
+
 
 
 
