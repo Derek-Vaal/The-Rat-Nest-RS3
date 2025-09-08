@@ -1,208 +1,152 @@
-# bot.py - RS3 RuneMetrics Notifications with Slash Commands
-import os
-import json
-import requests
 import discord
-from discord.ext import tasks
-from discord import app_commands
+from discord.ext import tasks, commands
+import requests
+import json
+import os
 from datetime import datetime, timedelta, timezone
+import re
+from collections import defaultdict
 
-# ----------------------
-# Config
-# ----------------------
+# === Load config ===
 TOKEN = os.getenv("DISCORD_TOKEN")
-if not TOKEN or len(TOKEN) < 50:
-    raise ValueError("DISCORD_TOKEN missing or invalid. Set it in Railway env vars.")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 1200))  # default 20 minutes
 
-INTERVAL = int(os.getenv("CHECK_INTERVAL", 600))  # default 10 min
-DB_FILE = "db.json"
-SEEN_FILE = "seen_events.json"
+# === Database (db.json) ===
+if not os.path.exists("db.json"):
+    with open("db.json", "w") as f:
+        json.dump({"channel_id": 0, "tracked_players": []}, f)
 
-# ----------------------
-# Bot Setup
-# ----------------------
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
-
-# ----------------------
-# Database
-# ----------------------
-if not os.path.exists(DB_FILE):
-    with open(DB_FILE, "w") as f:
-        json.dump({"players": {}, "channel": None, "xp_history": {}}, f)
-
-with open(DB_FILE) as f:
+with open("db.json", "r") as f:
     db = json.load(f)
 
-seen_events = set()
-if os.path.exists(SEEN_FILE):
-    with open(SEEN_FILE, "r") as f:
-        try:
-            seen_events = set(json.load(f))
-        except Exception:
-            seen_events = set()
-
 def save_db():
-    with open(DB_FILE, "w") as f:
-        json.dump(db, f, indent=2)
+    with open("db.json", "w") as f:
+        json.dump(db, f, indent=4)
 
-def save_seen():
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen_events), f)
+# === Bot Setup ===
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="/", intents=intents)
 
-# ----------------------
-# RuneMetrics Helpers
-# ----------------------
-def fetch_runemetrics(rsn):
-    url = f"https://apps.runescape.com/runemetrics/profile/profile?user={rsn}"
+# === Safe message sender ===
+async def send_update_message(message: str):
+    if db.get("channel_id", 0) == 0:
+        print("⚠️ No channel configured. Use /setchannel first.")
+        return
+
+    channel = bot.get_channel(db["channel_id"])
+    if channel is None:
+        print(f"⚠️ Could not find channel with ID {db['channel_id']}.")
+        return
+
     try:
-        r = requests.get(url, timeout=10)
-        return r.json()
-    except Exception:
-        return {}
+        await channel.send(message)
+    except Exception as e:
+        print(f"⚠️ Failed to send update: {e}")
 
-def get_skill_level(profile, skill_name):
-    try:
-        skills = profile.get("skillvalues", [])
-        skill_map = {
-            0: "Attack", 1: "Defence", 2: "Strength", 3: "Constitution",
-            4: "Ranged", 5: "Prayer", 6: "Magic", 7: "Cooking",
-            8: "Woodcutting", 9: "Fletching", 10: "Fishing", 11: "Firemaking",
-            12: "Crafting", 13: "Smithing", 14: "Mining", 15: "Herblore",
-            16: "Agility", 17: "Thieving", 18: "Slayer", 19: "Farming",
-            20: "Runecrafting", 21: "Hunter", 22: "Construction", 23: "Summoning",
-            24: "Dungeoneering", 25: "Divination", 26: "Invention", 27: "Archaeology"
-        }
-        for skill in skills:
-            if skill_map.get(skill.get("id"), "").lower() == skill_name.lower():
-                return skill.get("level", "?")
-    except Exception:
-        return "?"
-    return "?"
-
-skill_emojis = {
-    "Attack": "⚔️", "Defence": "🛡️", "Strength": "💪", "Constitution": "❤️",
-    "Ranged": "🏹", "Prayer": "🙏", "Magic": "✨", "Cooking": "🍳",
-    "Woodcutting": "🌲", "Fletching": "🏹", "Fishing": "🎣", "Firemaking": "🔥",
-    "Crafting": "🎨", "Smithing": "⚒️", "Mining": "⛏️", "Herblore": "🧪",
-    "Agility": "🤸", "Thieving": "🕵️", "Slayer": "💀", "Farming": "🌱",
-    "Runecrafting": "🌀", "Hunter": "🐾", "Construction": "🏠", "Summoning": "🔮",
-    "Dungeoneering": "🗝️", "Divination": "🔆", "Invention": "💡", "Archaeology": "🏺"
-}
-
-async def post_update(channel, text):
-    embed = discord.Embed(description=text, color=0xff9900)
-    await channel.send(embed=embed)
-
-# ----------------------
-# Slash Commands
-# ----------------------
-@tree.command(name="setchannel", description="Set this channel for RS3 updates")
-async def setchannel(interaction: discord.Interaction):
-    db["channel"] = interaction.channel.id
+# === Commands ===
+@bot.command()
+async def setchannel(ctx):
+    db["channel_id"] = ctx.channel.id
     save_db()
-    await interaction.response.send_message("✅ This channel is now set for RS3 updates.")
+    await ctx.send(f"✅ Updates will now post in {ctx.channel.mention}")
 
-@tree.command(name="track", description="Track a RuneScape player")
-async def track(interaction: discord.Interaction, rsn: str):
-    rsn = rsn.strip()
-    db["players"][rsn] = True
-    if rsn not in db["xp_history"]:
-        db["xp_history"][rsn] = []
-    save_db()
-    await interaction.response.send_message(f"✅ Now tracking **{rsn}**.")
-
-@tree.command(name="untrack", description="Stop tracking a RuneScape player")
-async def untrack(interaction: discord.Interaction, rsn: str):
-    rsn = rsn.strip()
-    if rsn in db["players"]:
-        del db["players"][rsn]
-        db["xp_history"].pop(rsn, None)
+@bot.command()
+async def track(ctx, *, player_name: str):
+    if player_name not in db["tracked_players"]:
+        db["tracked_players"].append(player_name)
         save_db()
-        await interaction.response.send_message(f"🛑 Stopped tracking **{rsn}**.")
+        await ctx.send(f"✅ Now tracking **{player_name}**")
     else:
-        await interaction.response.send_message("⚠️ That player isn’t being tracked.")
+        await ctx.send(f"⚠️ Already tracking **{player_name}**")
 
-@tree.command(name="list", description="List all tracked RuneScape players")
-async def list_players(interaction: discord.Interaction):
-    if db["players"]:
-        players = ", ".join(db["players"].keys())
-        await interaction.response.send_message(f"📋 Currently tracking: {players}")
+@bot.command()
+async def untrack(ctx, *, player_name: str):
+    if player_name in db["tracked_players"]:
+        db["tracked_players"].remove(player_name)
+        save_db()
+        await ctx.send(f"✅ Stopped tracking **{player_name}**")
     else:
-        await interaction.response.send_message("⚠️ No players are being tracked.")
+        await ctx.send(f"⚠️ Not tracking **{player_name}**")
 
-# ----------------------
-# Background Task
-# ----------------------
-@tasks.loop(seconds=INTERVAL)
+@bot.command()
+async def listplayers(ctx):
+    if not db["tracked_players"]:
+        await ctx.send("⚠️ No players are being tracked.")
+    else:
+        players = ", ".join(db["tracked_players"])
+        await ctx.send(f"👥 Tracking: {players}")
+
+# === Background Task ===
+last_checked = datetime.now(timezone.utc)
+
+@tasks.loop(seconds=CHECK_INTERVAL)
 async def check_updates():
-    if not db["channel"]:
-        return
-    channel = client.get_channel(db["channel"])
-    if not channel:
-        return
+    global last_checked
+    now = datetime.now(timezone.utc)
+    grouped_updates = defaultdict(lambda: defaultdict(int))
+    latest_levels = defaultdict(dict)
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-
-    for rsn in list(db["players"].keys()):
-        profile = fetch_runemetrics(rsn)
-        if not profile:
+    for player in db.get("tracked_players", []):
+        url = f"https://apps.runescape.com/runemetrics/profile/profile?user={player}&activities=20"
+        try:
+            r = requests.get(url, timeout=10)
+            data = r.json()
+        except Exception as e:
+            print(f"⚠️ Failed to fetch RuneMetrics for {player}: {e}")
             continue
 
-        events = profile.get("activities", [])
-        for event in events:
-            text = event.get("text", "")
-            date_str = event.get("date", "")
-            unique_id = f"{rsn}-{text}-{date_str}"
+        if "activities" not in data:
+            continue
 
-            if unique_id in seen_events:
-                continue
+        for act in data["activities"]:
+            ts = datetime.strptime(act["date"], "%d-%b-%Y %H:%M").replace(tzinfo=timezone.utc)
+            if ts > last_checked:
+                text = act["text"]
 
-            try:
-                event_time = datetime.strptime(date_str, "%d-%b-%Y %H:%M").replace(tzinfo=timezone.utc)
-            except Exception:
-                event_time = datetime.now(timezone.utc)
+                # Check if it's a level-up
+                match = re.match(r"(.+) levelled up (.+)\.", text)
+                if match:
+                    skill = match.group(2)
+                    grouped_updates[player][skill] += 1
 
-            if event_time < cutoff_time:
-                continue
-
-            seen_events.add(unique_id)
-
-            if "level" in text.lower():
-                if text.lower().startswith("reached level"):
-                    parts = text.split(" ")
-                    new_level = parts[2]
-                    skill_name = parts[3].replace(".", "")
-                elif text.lower().startswith("levelled up"):
-                    skill_name = text.split(" ")[2].replace(".", "")
-                    new_level = get_skill_level(profile, skill_name)
+                    # Save highest level mentioned in this activity
+                    level_match = re.search(r"to level (\d+)", text)
+                    if level_match:
+                        latest_levels[player][skill] = level_match.group(1)
                 else:
-                    skill_name, new_level = "Unknown", "?"
+                    # Non-level updates (quests, bosses, etc.)
+                    grouped_updates[player][text]["raw"] = True
 
-                emoji = skill_emojis.get(skill_name, "🎉")
-                msg = f"{emoji} **{rsn}** just reached **level {new_level} in {skill_name}!**"
-                await post_update(channel, msg)
+    last_checked = now
+
+    if not grouped_updates:
+        return
+
+    # Format grouped message
+    messages = []
+    for player, updates in grouped_updates.items():
+        for skill, count in updates.items():
+            if isinstance(count, dict) and "raw" in count:
+                # Raw text update
+                messages.append(f"**{player}** → {skill}")
             else:
-                await post_update(channel, f"📜 {text}")
+                # Grouped skill level-ups
+                level = latest_levels[player].get(skill, "?")
+                if count > 1:
+                    messages.append(f"**{player}** gained {count} levels in **{skill}** (now {level})")
+                else:
+                    messages.append(f"**{player}** levelled up **{skill}** (now {level})")
 
-    save_seen()
+    if messages:
+        await send_update_message("\n".join(messages))
 
-# ----------------------
-# Events
-# ----------------------
-@client.event
+# === Startup ===
+@bot.event
 async def on_ready():
-    await tree.sync()
-    print(f"✅ Logged in as {client.user}")
-    if not check_updates.is_running():
-        check_updates.start()
+    print(f"✅ Logged in as {bot.user}")
+    check_updates.start()
 
-# ----------------------
-# Run
-# ----------------------
-try:
-    client.run(TOKEN)
-except discord.errors.LoginFailure:
-    raise ValueError("❌ Failed to login: DISCORD_TOKEN invalid. Double-check Railway variable.")
+bot.run(TOKEN)
+
+
 
