@@ -6,13 +6,24 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-# Load config
-with open("config.json") as f:
-    config = json.load(f)
+# ========================
+# Load Config & Token
+# ========================
 
-# Prefer environment variable (Railway), fallback to config.json
-TOKEN = os.getenv("DISCORD_TOKEN", config["token"])
-INTERVAL = config["check_interval"]
+config = {}
+if os.path.exists("config.json"):
+    with open("config.json") as f:
+        config = json.load(f)
+
+TOKEN = os.getenv("DISCORD_TOKEN") or config.get("token")
+INTERVAL = config.get("check_interval", 300)  # default 5 minutes
+
+if not TOKEN:
+    raise ValueError("❌ No Discord token found. Set DISCORD_TOKEN in Railway or add 'token' to config.json.")
+
+# ========================
+# Discord Setup
+# ========================
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -32,6 +43,10 @@ def save_db():
     with open(DB_FILE, "w") as f:
         json.dump(db, f, indent=2)
 
+# ========================
+# RuneMetrics Helpers
+# ========================
+
 def fetch_runemetrics(rsn):
     url = f"https://apps.runescape.com/runemetrics/profile/profile?user={rsn}"
     try:
@@ -44,61 +59,35 @@ def get_skill_level(profile, skill_name):
     """Get the current level of a given skill from the profile"""
     try:
         skills = profile.get("skillvalues", [])
+        skill_map = {
+            0: "Attack", 1: "Defence", 2: "Strength", 3: "Constitution",
+            4: "Ranged", 5: "Prayer", 6: "Magic", 7: "Cooking",
+            8: "Woodcutting", 9: "Fletching", 10: "Fishing", 11: "Firemaking",
+            12: "Crafting", 13: "Smithing", 14: "Mining", 15: "Herblore",
+            16: "Agility", 17: "Thieving", 18: "Slayer", 19: "Farming",
+            20: "Runecrafting", 21: "Hunter", 22: "Construction", 23: "Summoning",
+            24: "Dungeoneering", 25: "Divination", 26: "Invention", 27: "Archaeology"
+        }
         for skill in skills:
-            if skill.get("id") and skill.get("level"):
-                # RuneMetrics skill IDs -> names
-                skill_map = {
-                    0: "Attack", 1: "Defence", 2: "Strength", 3: "Constitution",
-                    4: "Ranged", 5: "Prayer", 6: "Magic", 7: "Cooking",
-                    8: "Woodcutting", 9: "Fletching", 10: "Fishing", 11: "Firemaking",
-                    12: "Crafting", 13: "Smithing", 14: "Mining", 15: "Herblore",
-                    16: "Agility", 17: "Thieving", 18: "Slayer", 19: "Farming",
-                    20: "Runecrafting", 21: "Hunter", 22: "Construction", 23: "Summoning",
-                    24: "Dungeoneering", 25: "Divination", 26: "Invention", 27: "Archaeology"
-                }
-                if skill_map.get(skill["id"], "").lower() == skill_name.lower():
-                    return skill.get("level", "?")
+            if skill_map.get(skill["id"], "").lower() == skill_name.lower():
+                return skill.get("level", "?")
     except Exception:
         return "?"
     return "?"
 
 # Skill → Emoji mapping
 skill_emojis = {
-    "Attack": "⚔️",
-    "Defence": "🛡️",
-    "Strength": "💪",
-    "Constitution": "❤️",
-    "Ranged": "🏹",
-    "Prayer": "🙏",
-    "Magic": "✨",
-    "Cooking": "🍳",
-    "Woodcutting": "🌲",
-    "Fletching": "🏹",
-    "Fishing": "🎣",
-    "Firemaking": "🔥",
-    "Crafting": "🎨",
-    "Smithing": "⚒️",
-    "Mining": "⛏️",
-    "Herblore": "🧪",
-    "Agility": "🤸",
-    "Thieving": "🕵️",
-    "Slayer": "💀",
-    "Farming": "🌱",
-    "Runecrafting": "🌀",
-    "Hunter": "🐾",
-    "Construction": "🏠",
-    "Summoning": "🔮",
-    "Dungeoneering": "🗝️",
-    "Divination": "🔆",
-    "Invention": "💡",
-    "Archaeology": "🏺"
+    "Attack": "⚔️", "Defence": "🛡️", "Strength": "💪", "Constitution": "❤️",
+    "Ranged": "🏹", "Prayer": "🙏", "Magic": "✨", "Cooking": "🍳",
+    "Woodcutting": "🌲", "Fletching": "🏹", "Fishing": "🎣", "Firemaking": "🔥",
+    "Crafting": "🎨", "Smithing": "⚒️", "Mining": "⛏️", "Herblore": "🧪",
+    "Agility": "🤸", "Thieving": "🕵️", "Slayer": "💀", "Farming": "🌱",
+    "Runecrafting": "🌀", "Hunter": "🐾", "Construction": "🏠", "Summoning": "🔮",
+    "Dungeoneering": "🗝️", "Divination": "🔆", "Invention": "💡", "Archaeology": "🏺"
 }
 
 async def post_update(channel, text):
-    embed = discord.Embed(
-        description=text,
-        color=0xff9900
-    )
+    embed = discord.Embed(description=text, color=0xff9900)
     await channel.send(embed=embed)
 
 # ========================
@@ -158,7 +147,6 @@ async def check_updates():
         if not profile:
             continue
 
-        # Process recent activities
         events = profile.get("activities", [])
         for event in events:
             text = event.get("text", "")
@@ -178,11 +166,11 @@ async def check_updates():
 
             seen_events.add(unique_id)
 
-            # Parsing level-up messages
+            # Level-up events
             if "level" in text.lower():
                 if text.lower().startswith("reached level"):
                     parts = text.split(" ")
-                    new_level = parts[2]  # e.g., 82
+                    new_level = parts[2]
                     skill_name = parts[3].replace(".", "")
                 elif text.lower().startswith("levelled up"):
                     skill_name = text.split(" ")[2].replace(".", "")
@@ -192,11 +180,14 @@ async def check_updates():
                     new_level = "?"
 
                 emoji = skill_emojis.get(skill_name, "🎉")
-                level_message = f"{emoji} **{rsn}** just reached **level {new_level} in {skill_name}!**"
-                await post_update(channel, level_message)
+                await post_update(channel, f"{emoji} **{rsn}** just reached **level {new_level} in {skill_name}!**")
             else:
                 # Other activities (quests, etc.)
                 await post_update(channel, f"📜 {text}")
+
+# ========================
+# Events
+# ========================
 
 @client.event
 async def on_ready():
@@ -206,16 +197,20 @@ async def on_ready():
 
 client.run(TOKEN)
 
-
 # ========================
 # Version Notes
 # ========================
 """
-Patch Notes – Version 1.6
+Patch Notes – Version 1.7
 --------------------------
-✅ Added environment variable fallback for TOKEN (Railway support)
-✅ Still works locally with config.json
-✅ Everything else unchanged
+✅ Token handling fixed:
+   • Uses DISCORD_TOKEN env var in Railway
+   • Falls back to config.json for local dev
+   • Raises clear error if missing
+✅ Keeps all RuneScape update features:
+   • Level-ups with skill emojis
+   • Quests / activities with 📜
+   • /setchannel, /track, /untrack, /list
 """
 
 
