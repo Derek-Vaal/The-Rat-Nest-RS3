@@ -166,7 +166,7 @@ async def check_updates():
 
             seen_events.add(unique_id)
 
-            # Level-up events
+                        # Level-up events
             if "level" in text.lower():
                 if text.lower().startswith("reached level"):
                     parts = text.split(" ")
@@ -181,9 +181,14 @@ async def check_updates():
 
                 emoji = skill_emojis.get(skill_name, "🎉")
                 await post_update(channel, f"{emoji} **{rsn}** just reached **level {new_level} in {skill_name}!**")
+
+            # Quest completions
+            elif "quest" in text.lower() and "completed" in text.lower():
+                await post_update(channel, f"📜 **{rsn}** just {text}")
+
+            # Other activities
             else:
-                # Other activities (quests, etc.)
-                await post_update(channel, f"📜 {text}")
+                await post_update(channel, f"📜 **{rsn}** — {text}")
 
 # ========================
 # Events
@@ -212,6 +217,7 @@ Patch Notes – Version 1.7
    • Quests / activities with 📜
    • /setchannel, /track, /untrack, /list
 """
+
 
 
 
