@@ -12,17 +12,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger("rs3-bot")
 
-# --- Load config.json ---
+# --- Load config.json (only for non-sensitive settings) ---
 with open("config.json", "r", encoding="utf-8") as f:
     config = json.load(f)
 
 INTERVAL = config.get("check_interval", 300)  # default 5 minutes
-CHANNEL_ID = config.get("channel_id")  # must be set in config.json
 
-# --- Load token from Railway env ---
+# --- Load sensitive info from env ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("❌ DISCORD_TOKEN environment variable is not set!")
+
+CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+if CHANNEL_ID:
+    CHANNEL_ID = int(CHANNEL_ID)  # convert string -> int
+else:
+    logger.warning("⚠️ DISCORD_CHANNEL_ID not set, tracker messages will be skipped.")
 
 # --- Discord intents ---
 intents = discord.Intents.default()
@@ -60,7 +65,7 @@ async def tracker_loop():
             # TODO: Replace with your RS3 tracking logic
             await channel.send("✅ Tracker loop executed.")
         else:
-            logger.warning("⚠️ No channel_id set in config.json, skipping message send.")
+            logger.info("⚠️ No channel ID set, skipping message send.")
 
     except Exception as e:
         logger.error(f"Error in tracker_loop: {e}")
@@ -92,5 +97,7 @@ async def list_accounts(interaction: discord.Interaction):
 # --- Run bot ---
 if __name__ == "__main__":
     bot.run(TOKEN)
+
+
 
 
