@@ -23,11 +23,16 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("❌ DISCORD_TOKEN environment variable is not set!")
 
-CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
-if CHANNEL_ID:
-    CHANNEL_ID = int(CHANNEL_ID)  # convert string -> int
-else:
-    logger.warning("⚠️ DISCORD_CHANNEL_ID not set, tracker messages will be skipped.")
+CHANNEL_ID_RAW = os.getenv("DISCORD_CHANNEL_ID")
+if not CHANNEL_ID_RAW:
+    raise RuntimeError("❌ DISCORD_CHANNEL_ID environment variable is not set!")
+
+try:
+    CHANNEL_ID = int(CHANNEL_ID_RAW)
+except ValueError:
+    raise RuntimeError("❌ DISCORD_CHANNEL_ID must be a numeric channel ID!")
+
+logger.info(f"✅ DISCORD_CHANNEL_ID loaded: {CHANNEL_ID}")
 
 # --- Discord intents ---
 intents = discord.Intents.default()
@@ -53,19 +58,16 @@ async def tracker_loop():
     try:
         logger.info("Running RS3 account check...")
 
-        if CHANNEL_ID:
-            channel = bot.get_channel(CHANNEL_ID)
-            if channel is None:
-                logger.error(
-                    f"❌ Could not find channel with ID {CHANNEL_ID}. "
-                    "Check if the bot is in the server and has permissions."
-                )
-                return
+        channel = bot.get_channel(CHANNEL_ID)
+        if channel is None:
+            logger.error(
+                f"❌ Could not find channel with ID {CHANNEL_ID}. "
+                "Check if the bot is in the server and has permissions."
+            )
+            return
 
-            # TODO: Replace with your RS3 tracking logic
-            await channel.send("✅ Tracker loop executed.")
-        else:
-            logger.info("⚠️ No channel ID set, skipping message send.")
+        # TODO: Replace with your RS3 tracking logic
+        await channel.send("✅ Tracker loop executed.")
 
     except Exception as e:
         logger.error(f"Error in tracker_loop: {e}")
@@ -97,6 +99,8 @@ async def list_accounts(interaction: discord.Interaction):
 # --- Run bot ---
 if __name__ == "__main__":
     bot.run(TOKEN)
+
+
 
 
 
