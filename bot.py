@@ -1,140 +1,99 @@
 import discord
 from discord.ext import tasks
 from discord import app_commands
-import requests
 import json
-import os
+import logging
+import asyncio
 from datetime import datetime
 
-# Load config
-try:
-    with open("config.json") as f:
-        config = json.load(f)
-except FileNotFoundError:
-    config = {}
+# --- Logging setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("rs3-bot")
 
-TOKEN = os.getenv("DISCORD_TOKEN", config.get("token"))
-CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", config.get("channel_id", 0)))
-RSNS = config.get("rsns", [])
+# --- Load config ---
+with open("config.json", "r", encoding="utf-8") as f:
+    config = json.load(f)
 
+TOKEN = config.get("token")
+INTERVAL = config.get("check_interval", 300)  # default 5 minutes
+
+# --- Discord intents ---
 intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
+intents.message_content = False  # only needed if you're reading msg text
 
-# Track last seen data
-last_quests = {}
-last_levels = {}
-last_collections = {}
+# --- Bot client ---
+class RS3Bot(discord.Client):
+    def __init__(self):
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
 
-# Icon map
-skill_icons = {
-    "Attack": "⚔️",
-    "Defence": "🛡️",
-    "Strength": "💪",
-    "Constitution": "❤️",
-    "Ranged": "🏹",
-    "Prayer": "🙏",
-    "Magic": "✨",
-    "Cooking": "🍳",
-    "Woodcutting": "🌲",
-    "Fletching": "🏹",
-    "Fishing": "🎣",
-    "Firemaking": "🔥",
-    "Crafting": "🎨",
-    "Smithing": "⚒️",
-    "Mining": "⛏️",
-    "Herblore": "🧪",
-    "Agility": "🤸",
-    "Thieving": "🕵️",
-    "Slayer": "👹",
-    "Farming": "🌾",
-    "Runecrafting": "🔮",
-    "Hunter": "🏕️",
-    "Construction": "🏠",
-    "Summoning": "🦄",
-    "Dungeoneering": "🏰",
-    "Divination": "🌌",
-    "Invention": "💡",
-    "Archaeology": "🏺",
-    "Necromancy": "🧟"
-}
+    async def setup_hook(self):
+        # Sync slash commands globally
+        await self.tree.sync()
+        logger.info("Slash commands synced.")
 
-def fetch_runemetrics(rsn):
-    url = f"https://apps.runescape.com/runemetrics/profile/profile?user={rsn}"
+bot = RS3Bot()
+
+# --- Background task ---
+@tasks.loop(seconds=INTERVAL)
+async def tracker_loop():
+    """Background loop that checks for RS3 account updates."""
     try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        if isinstance(data, dict):
-            return data
-        else:
-            print(f"⚠️ RuneMetrics returned non-dict for {rsn}: {data}")
-            return {}
+        # TODO: Replace with your actual tracking logic
+        logger.info("Running RS3 account check...")
+        # Example placeholder:
+        # updates = check_accounts()
+        # for channel_id, msg in updates:
+        #     channel = bot.get_channel(channel_id)
+        #     if channel:
+        #         await channel.send(msg)
     except Exception as e:
-        print(f"⚠️ Error fetching {rsn}: {e}")
-        return {}
+        logger.error(f"Error in tracker_loop: {e}")
 
-@client.event
-async def on_ready():
-    print(f"✅ Logged in as {client.user}")
-    await tree.sync()
-    check_updates.start()
+@tracker_loop.before_loop
+async def before_tracker_loop():
+    await bot.wait_until_ready()
+    logger.info("Tracker loop is starting...")
 
-@tasks.loop(minutes=5)
-async def check_updates():
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        print("❌ Channel not found")
-        return
+# --- Slash commands ---
+@bot.tree.command(name="ping", description="Check if the bot is alive.")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("✅ Pong! Bot is running.", ephemeral=True)
 
-    for rsn in RSNS:
-        profile = fetch_runemetrics(rsn)
-        if not profile:
-            continue
+@bot.tree.command(name="track", description="Start tracking a RuneScape 3 account.")
+@app_commands.describe(username="RSN of the player to track")
+async def track(interaction: discord.Interaction, username: str):
+    # TODO: Hook into your storage logic
+    await interaction.response.send_message(f"📡 Now tracking **{username}**.", ephemeral=False)
 
-        # === Quest Completions ===
-        if "quests" in profile:
-            completed = [q["title"] for q in profile["quests"] if q.get("status") == "COMPLETED"]
-            old_completed = last_quests.get(rsn, set())
-            new_completed = set(completed) - old_completed
-            for quest in new_completed:
-                await channel.send(f"🎉 **{rsn}** has completed the quest **{quest}**!")
-            last_quests[rsn] = set(completed)
+@bot.tree.command(name="untrack", description="Stop tracking a RuneScape 3 account.")
+@app_commands.describe(username="RSN of the player to stop tracking")
+async def untrack(interaction: discord.Interaction, username: str):
+    # TODO: Hook into your storage logic
+    await interaction.response.send_message(f"🛑 Stopped tracking **{username}**.", ephemeral=False)
 
-        # === Level Ups ===
-        if "skillvalues" in profile:
-            skills = {s["level"]: s["id"] for s in profile["skillvalues"]}
-            skill_map = {s["id"]: s for s in profile["skillvalues"]}
+@bot.tree.command(name="list", description="List all currently tracked accounts.")
+async def list_accounts(interaction: discord.Interaction):
+    # TODO: Pull from your storage
+    tracked = ["gimseedspoon", "gim mythy"]  # placeholder
+    if tracked:
+        msg = "📋 Currently tracked accounts:\n" + "\n".join(f"• {u}" for u in tracked)
+    else:
+        msg = "No accounts are currently being tracked."
+    await interaction.response.send_message(msg, ephemeral=False)
 
-            old_levels = last_levels.get(rsn, {})
-            new_levelups = []
-            for skill in profile["skillvalues"]:
-                skill_name = skill["skill"]
-                level = skill["level"]
-                old_level = old_levels.get(skill_name, 0)
-                if level > old_level:
-                    icon = skill_icons.get(skill_name, "⭐")
-                    new_levelups.append(f"{icon} {skill_name} {level}")
+# --- Run bot ---
+if __name__ == "__main__":
+    try:
+        tracker_loop.start()
+        bot.run(TOKEN)
+    except KeyboardInterrupt:
+        logger.info("Bot shutting down...")
+    except Exception as e:
+        logger.error(f"Failed to run bot: {e}")
 
-            if new_levelups:
-                levelup_msg = f"⬆️ **{rsn}** has leveled up!\n" + "\n".join(new_levelups)
-                await channel.send(levelup_msg)
-
-            last_levels[rsn] = {s["skill"]: s["level"] for s in profile["skillvalues"]}
-
-        # === Collection Log Unlocks ===
-        if "activities" in profile:
-            new_logs = []
-            old_logs = last_collections.get(rsn, set())
-            for act in profile["activities"]:
-                text = act.get("text", "")
-                if "new collection log item" in text.lower() and text not in old_logs:
-                    new_logs.append(text)
-
-            if new_logs:
-                for log in new_logs:
-                    await channel.send(f"📜 **{rsn}** unlocked: {log}")
-                last_collections[rsn] = old_logs.union(new_logs)
-
-client.run(TOKEN)
 
 
