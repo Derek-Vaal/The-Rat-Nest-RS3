@@ -29,7 +29,7 @@ tree = app_commands.CommandTree(client)
 DB_FILE = "db.json"
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w") as f:
-        json.dump({"players": {}, "channel": None, "xp_history": {}, "seen_events": {}}, f)
+        json.dump({"players": {}, "channel": None, "xp_history": {}, "seen_events": {}, "quests_completed": {}}, f)
 
 with open(DB_FILE) as f:
     db = json.load(f)
@@ -95,6 +95,8 @@ async def track(interaction: discord.Interaction, rsn: str):
     db["players"][rsn] = True
     if rsn not in db["xp_history"]:
         db["xp_history"][rsn] = []
+    if rsn not in db["quests_completed"]:
+        db["quests_completed"][rsn] = []
     save_db()
     await interaction.response.send_message(f"✅ Now tracking **{rsn}**.")
 
@@ -104,6 +106,7 @@ async def untrack(interaction: discord.Interaction, rsn: str):
     if rsn in db["players"]:
         del db["players"][rsn]
         db["xp_history"].pop(rsn, None)
+        db["quests_completed"].pop(rsn, None)
         save_db()
         await interaction.response.send_message(f"🛑 Stopped tracking **{rsn}**.")
     else:
@@ -136,6 +139,7 @@ async def check_updates():
             profile = await fetch_runemetrics(session, rsn)
             if not profile:
                 continue
+
             events = profile.get("activities", [])
             for event in events:
                 text = event.get("text", "")
@@ -151,6 +155,9 @@ async def check_updates():
                     continue
                 seen_events.add(unique_id)
 
+                # -------------------
+                # Level-up messages
+                # -------------------
                 if "level" in text.lower():
                     if text.lower().startswith("reached level"):
                         parts = text.split(" ")
@@ -163,26 +170,3 @@ async def check_updates():
                         skill_name = "Unknown"
                         new_level = "?"
                     emoji = skill_emojis.get(skill_name, "🎉")
-                    msg = f"{emoji} **{rsn}** just reached **level {new_level} in {skill_name}!**"
-                    await post_update(channel, msg)
-                else:
-                    await post_update(channel, f"📜 {text}")
-    save_db()
-
-@check_updates.before_loop
-async def before_check_updates():
-    await client.wait_until_ready()
-
-# -------------------
-# Events
-# -------------------
-@client.event
-async def on_ready():
-    await tree.sync()
-    print(f"✅ Logged in as {client.user}")
-    check_updates.start()
-
-# -------------------
-# Run Bot
-# -------------------
-client.run(TOKEN)
