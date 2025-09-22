@@ -16,7 +16,7 @@ logger = logging.getLogger("rs3-bot")
 with open("config.json", "r", encoding="utf-8") as f:
     config = json.load(f)
 
-INTERVAL = config.get("check_interval", 300)  # default 5m
+INTERVAL = config.get("check_interval", 300)  # default 5 minutes
 CHANNEL_ID = config.get("channel_id")  # must be set in config.json
 
 # --- Load token from Railway env ---
@@ -34,6 +34,8 @@ class RS3Bot(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
+        # Start background tracker loop after bot is ready
+        tracker_loop.start()
         await self.tree.sync()
         logger.info("✅ Slash commands synced.")
 
@@ -46,7 +48,6 @@ async def tracker_loop():
     try:
         logger.info("Running RS3 account check...")
 
-        # Example: send a heartbeat message to your channel
         if CHANNEL_ID:
             channel = bot.get_channel(CHANNEL_ID)
             if channel is None:
@@ -56,7 +57,7 @@ async def tracker_loop():
                 )
                 return
 
-            # Replace this with your RS3 tracking update logic
+            # TODO: Replace with your RS3 tracking logic
             await channel.send("✅ Tracker loop executed.")
         else:
             logger.warning("⚠️ No channel_id set in config.json, skipping message send.")
@@ -90,5 +91,6 @@ async def list_accounts(interaction: discord.Interaction):
 
 # --- Run bot ---
 if __name__ == "__main__":
-    tracker_loop.start()
     bot.run(TOKEN)
+
+
