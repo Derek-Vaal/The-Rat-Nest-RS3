@@ -1,28 +1,31 @@
+import os
 import discord
 from discord.ext import tasks
 from discord import app_commands
 import json
 import logging
-import asyncio
-from datetime import datetime
 
-# --- Logging setup ---
+# --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("rs3-bot")
 
-# --- Load config ---
+# --- Load config.json ---
 with open("config.json", "r", encoding="utf-8") as f:
     config = json.load(f)
 
-TOKEN = config.get("token")
-INTERVAL = config.get("check_interval", 300)  # default 5 minutes
+INTERVAL = config.get("check_interval", 300)  # default 5m
+CHANNEL_ID = config.get("channel_id")  # must be set in config.json
+
+# --- Load token from Railway env ---
+TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    raise RuntimeError("❌ DISCORD_TOKEN environment variable is not set!")
 
 # --- Discord intents ---
 intents = discord.Intents.default()
-intents.message_content = False  # only needed if you're reading msg text
 
 # --- Bot client ---
 class RS3Bot(discord.Client):
@@ -31,9 +34,8 @@ class RS3Bot(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        # Sync slash commands globally
         await self.tree.sync()
-        logger.info("Slash commands synced.")
+        logger.info("✅ Slash commands synced.")
 
 bot = RS3Bot()
 
@@ -42,14 +44,23 @@ bot = RS3Bot()
 async def tracker_loop():
     """Background loop that checks for RS3 account updates."""
     try:
-        # TODO: Replace with your actual tracking logic
         logger.info("Running RS3 account check...")
-        # Example placeholder:
-        # updates = check_accounts()
-        # for channel_id, msg in updates:
-        #     channel = bot.get_channel(channel_id)
-        #     if channel:
-        #         await channel.send(msg)
+
+        # Example: send a heartbeat message to your channel
+        if CHANNEL_ID:
+            channel = bot.get_channel(CHANNEL_ID)
+            if channel is None:
+                logger.error(
+                    f"❌ Could not find channel with ID {CHANNEL_ID}. "
+                    "Check if the bot is in the server and has permissions."
+                )
+                return
+
+            # Replace this with your RS3 tracking update logic
+            await channel.send("✅ Tracker loop executed.")
+        else:
+            logger.warning("⚠️ No channel_id set in config.json, skipping message send.")
+
     except Exception as e:
         logger.error(f"Error in tracker_loop: {e}")
 
@@ -64,36 +75,20 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Pong! Bot is running.", ephemeral=True)
 
 @bot.tree.command(name="track", description="Start tracking a RuneScape 3 account.")
-@app_commands.describe(username="RSN of the player to track")
 async def track(interaction: discord.Interaction, username: str):
-    # TODO: Hook into your storage logic
     await interaction.response.send_message(f"📡 Now tracking **{username}**.", ephemeral=False)
 
 @bot.tree.command(name="untrack", description="Stop tracking a RuneScape 3 account.")
-@app_commands.describe(username="RSN of the player to stop tracking")
 async def untrack(interaction: discord.Interaction, username: str):
-    # TODO: Hook into your storage logic
     await interaction.response.send_message(f"🛑 Stopped tracking **{username}**.", ephemeral=False)
 
 @bot.tree.command(name="list", description="List all currently tracked accounts.")
 async def list_accounts(interaction: discord.Interaction):
-    # TODO: Pull from your storage
-    tracked = ["gimseedspoon", "gim mythy"]  # placeholder
-    if tracked:
-        msg = "📋 Currently tracked accounts:\n" + "\n".join(f"• {u}" for u in tracked)
-    else:
-        msg = "No accounts are currently being tracked."
+    tracked = ["gimseedspoon", "gim mythy"]  # placeholder until storage added
+    msg = "📋 Currently tracked accounts:\n" + "\n".join(f"• {u}" for u in tracked)
     await interaction.response.send_message(msg, ephemeral=False)
 
 # --- Run bot ---
 if __name__ == "__main__":
-    try:
-        tracker_loop.start()
-        bot.run(TOKEN)
-    except KeyboardInterrupt:
-        logger.info("Bot shutting down...")
-    except Exception as e:
-        logger.error(f"Failed to run bot: {e}")
-
-
-
+    tracker_loop.start()
+    bot.run(TOKEN)
